@@ -1,7 +1,7 @@
 {
   "name": "@h4m5ter/koishi-plugin-steaminfo",
-  "description": "",
-  "version": "0.0.1",
+  "description": "query steam games",
+  "version": "0.1.0",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -9,13 +9,11 @@
     "dist"
   ],
   "license": "MIT",
-  "scripts": {},
   "keywords": [
     "chatbot",
     "koishi",
     "plugin"
   ],
-  "devDependencies": {},
   "peerDependencies": {
     "koishi": "^4.17.12"
   }

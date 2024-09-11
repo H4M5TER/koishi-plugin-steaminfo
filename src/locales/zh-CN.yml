@@ -1,0 +1,15 @@
+commands:
+  steaminfo:
+    description: 查询 Steam 游戏信息
+    # usage: |-
+    #   指令用法
+    #   可以是多行文本
+    # examples: |-
+    #   steaminfo 近月少女
+    # options:
+    #   bar: 选项描述
+    messages:
+      found: 找到以下游戏
+      prompt: 输入序号查看游戏详情
+      guess: 显示列表第一个游戏详情
+      not-found: 未找到游戏信息
