@@ -1,5 +1,5 @@
-import { Context, h, Session, z } from 'koishi'
-import type {} from 'koishi-plugin-cheerio'
+import { Context, Fragment, h, Session, z } from 'koishi'
+import * as cheerio from 'cheerio'
 import type {} from 'koishi-plugin-puppeteer'
 
 export const name = 'steaminfo'
@@ -10,30 +10,28 @@ export const inject = {
 }
 
 export interface Config {
-  mode: 'text' | 'image'
+  mode: 'text' | 'image' | 'screenshot'
   suggest: {
-    params: [string, string][]
+    params: Record<string, string>
   }
 }
 
-export const Config/*: z<Config> */ = z.object({
+export const Config: z<Config> = z.object({
   mode: z.union([
     z.const('text').description('纯文本模式'),
-    z.const('image').description('有图片模式'),
-  ]).role('radio').default('image'),
+    z.const('image').description('带图模式'),
+    z.const('screenshot').description('截图模式 (无 puppeteer 无效)'),
+  ]).role('radio').default('screenshot'),
   suggest: z.object({
-    params: z.array(z.tuple([z.string(), z.string()] as const)).role('table').default([
-      ['f', 'games'],
-      ['cc', 'CN'],
-      ['realm', '1'],
-      ['l', 'schinese'],
-      // ['v', ''], // 会变的类似时间戳的东西 没看出有什么用
-      // ['excluded_content_descriptors[]', '3'], // 未知
-      // ['excluded_content_descriptors[]', '4'],
-      ['use_store_query', '1'],
-      ['use_search_spellcheck', '1'],
-      ['search_creators_and_tags', '1'],
-    ]),
+    params: z.dict(String).role('table').default({
+      f: 'games',
+      cc: 'CN',
+      realm: '1',
+      l: 'schinese',
+      use_store_query: '1',
+      use_search_spellcheck: '1',
+      search_creators_and_tags: '1',
+    }),
   }),
 })
 
@@ -41,21 +39,57 @@ export async function apply(ctx: Context, config: Config) {
   const logger = ctx.logger('steaminfo')
   ctx.i18n.define('zh-CN', require('./locales/zh-CN'))
 
-  let renderDetail = async (session: Session, appid: string) => {
-    const resp = await ctx.http.get(`https://store.steampowered.com/api/appdetails?appids=${appid}`, { responseType: 'json' })
-    if (!resp[appid].success) return ''
+  let renderDetail = async (session: Session, appid: string): Promise<Fragment> => {
+    const { cc, l } = config.suggest.params
+    const resp = await ctx.http.get(
+      `https://store.steampowered.com/api/appdetails?` + new URLSearchParams({ 
+        cc,
+        l, 
+        appids: appid, 
+      }).toString(), { responseType: 'json' })
+    if (!resp[appid].success) {
+      logger.warn('failed to fetch app details')
+      return
+    }
     const data = resp[appid].data
+    let price = data.is_free ? session.text('.free') : data.price_overview.final_formatted
+    if (data.price_overview.initial_formatted) {
+      price = price + ' / ' + data.price_overview.initial_formatted
+    }
+    const date = session.text('.release-date', data.release_date)
+    // 这个数据里居然没有好评率？
+    const developers = session.text('.developers', [data.developers.join(', ')])
+    const publishers = session.text('.publishers', [data.publishers.join(', ')])
 
-    return <>
+    const reviewData = await ctx.http.get(`https://store.steampowered.com/appreviews/${appid}?` + new URLSearchParams({
+      l,
+      json: '1',
+      language: 'all',
+      num_per_page: '0',
+    }).toString(), { responseType: 'json' })
+    let review: string
+    if (reviewData.success) {
+      const { total_positive, total_reviews } = reviewData.query_summary
+      review = session.text('.review', { ...reviewData.query_summary, rate: (total_positive / total_reviews * 100).toFixed(1) })
+    }
+
+    const result: h = <>
+      <img src={data.header_image}/>
       <p>{data.name}</p>
+      <p>{price} {review}</p>
+      <p>{date}</p>
+      <p>{developers} {publishers}</p>
       <p>{data.short_description}</p>
-      <p>{session.text('.price', { price: data.price_overview.final / 100 })}</p>
     </>
+    if (config.mode !== 'text') return result
+    return h.transform([result], {
+      'img': () => '',
+    })
   }
 
   let page: Awaited<ReturnType<typeof ctx.puppeteer.page>>
   ctx.inject(['puppeteer'], (ctx) => {
-    if (config.mode === 'text') return
+    if (config.mode !== 'screenshot') return
 
     ctx.on('ready', async () => {
       page = await ctx.puppeteer.page()
@@ -79,11 +113,13 @@ export async function apply(ctx: Context, config: Config) {
       if (await page.$('select#ageYear')) {
         // bypass age gate
         await page.select('select#ageYear', '2000')
-        page.evaluate('ViewProductPage()')
+        await page.evaluate('ViewProductPage()')
       }
 
       const element = await page.waitForSelector('.glance_ctn')
       const buffer = await element.screenshot({ type: 'webp' })
+
+      // TODO 显示价格
       
       await page.goto('about:blank')
       return h.image(buffer, 'image/webp')
@@ -96,7 +132,7 @@ export async function apply(ctx: Context, config: Config) {
       params.append('term', input.trim())
       const resp = await ctx.http.get('https://store.steampowered.com/search/suggest?' + params.toString())
 
-      const $ = ctx.cheerio.load(resp)
+      const $ = cheerio.load(resp)
       const result = $.extract({
         names: ['a[data-ds-appid] > .match_name'],
         appids: [{ selector: 'a', value: 'data-ds-appid' }], 
@@ -105,25 +141,30 @@ export async function apply(ctx: Context, config: Config) {
       const length = result.names.length
       if (length < 1) return session.text('.not-found')
 
-      let detail: h | string = ''
+      let detail: Fragment
       const exactMatch = result.names[0].toLowerCase().includes(input.toLowerCase())
       if (length === 1 || exactMatch) {
         detail = await renderDetail(session, result.appids[0])
       }
 
+      const list = result.names.map((name, i) => `${i + 1}. ${name} - https://store.steampowered.com/app/${result.appids[i]}`).join('\n')
       const answer = <>
         <p>{session.text('.found')}</p>
-        <p>{result.names.map((name, i) => `${i + 1}. ${name} - https://store.steampowered.com/app/${result.appids[i]}`).join('\n')}</p>
-        <p>{detail}</p>
+        <p>{list}</p>
         <p>{result.appids.length > 1 ? session.text('.prompt') : ''}</p>
       </>
-      if (length === 1) return answer
-      else session.send(answer)
+      await session.sendQueued(answer)
+      await session.sendQueued(detail)
+      if (length === 1) return
 
-      const choice = await session.prompt()
-      const index = parseInt(choice) - 1
-      if (index >= 0 && index < length) {
-        return renderDetail(session, result.appids[index])
-      }
+      const choice = await session.prompt((session) => {
+        const input = h.select(session.elements, 'text')[0].toString()
+        const index = parseInt(input) - 1
+        if (index < 0 || index >= length) {
+          return // not to stuck middleware
+        }
+        return index
+      })
+      return renderDetail(session, result.appids[choice])
     })
 }

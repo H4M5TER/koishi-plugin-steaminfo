@@ -13,3 +13,8 @@ commands:
       prompt: 输入序号查看游戏详情
       guess: 显示列表第一个游戏详情
       not-found: 未找到游戏信息
+      free: 免费
+      release-date: 发行日期：{date}
+      publishers: '发行商: {0}'
+      developers: '工作室: {0}'
+      review: '{review_score_desc}: 此游戏的 {total_reviews} 篇用户评测中有 {rate}% 为好评'
