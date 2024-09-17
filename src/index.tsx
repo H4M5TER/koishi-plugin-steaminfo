@@ -29,19 +29,20 @@ export const Config: z<Config> = z.object({
     z.const('screenshot').description('截图模式 (无 puppeteer 无效)'),
   ]).role('radio').default('screenshot'),
   suggest: z.object({
-    fuzzy: z.boolean().default(true),
+    fuzzy: z.boolean().default(true).description('模糊匹配到游戏名自动发送详情'),
+    // https://store.steampowered.com/search/suggest?f=games&cc=CN&realm=1&l=schinese&use_store_query=1&use_search_spellcheck=1&search_creators_and_tags=1&term=
     params: z.dict(String).role('table').default({
       f: 'games',
-      cc: 'CN',
+      cc: 'US',
       realm: '1',
       l: 'schinese',
       use_store_query: '1',
       use_search_spellcheck: '1',
       search_creators_and_tags: '1',
-    }),
+    }).description('搜索请求参数'),
   }),
   middleware: z.object({
-    enable: z.boolean().default(true),
+    enable: z.boolean().default(true).description('启用中间件检测 Steam 商店链接'),
   }),
   render: z.object({
     imageType: z.union([
@@ -82,7 +83,6 @@ export async function apply(ctx: Context, config: Config) {
       }
     }
     const date = session.text('.release-date', data.release_date)
-    // 这个数据里居然没有好评率？
     const developers = session.text('.developers', [data.developers.join(', ')])
     const publishers = session.text('.publishers', [data.publishers.join(', ')])
 
