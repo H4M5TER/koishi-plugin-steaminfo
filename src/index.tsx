@@ -17,6 +17,9 @@ export interface Config {
   middleware: {
     enable: boolean
   }
+  render: {
+    imageType: 'webp' | 'png'
+  }
 }
 
 export const Config: z<Config> = z.object({
@@ -39,6 +42,12 @@ export const Config: z<Config> = z.object({
   }),
   middleware: z.object({
     enable: z.boolean().default(true),
+  }),
+  render: z.object({
+    imageType: z.union([
+      z.const('webp'),
+      z.const('png'),
+    ]).role('radio').default('webp').description('截图格式'),
   }),
 })
 
@@ -137,25 +146,29 @@ export async function apply(ctx: Context, config: Config) {
 
       const element = await page.waitForSelector('.glance_ctn', { timeout: 5000 })
       // FIX 图片加载不完整
-      const buffer = await element.screenshot({ type: 'webp' })
+      const buffer = await element.screenshot({ type: config.render.imageType })
 
       // TODO 显示价格
       
       await page.goto('about:blank')
-      return h.image(buffer, 'image/webp')
+      return h.image(buffer, 'image/' + config.render.imageType)
     }
 
     renderDetail = (session: Session, appid: string, mode?: Config['mode']) => {
       if (!mode) mode = config.mode
-      if (mode === 'screenshot') {
-        return renderImage(session, appid)
+      if (mode === 'text') {
+        return renderText(session, appid)
       }
-      return renderText(session, appid)
+      return renderImage(session, appid)
     }
   })
 
   ctx.command('steaminfo <name:text>')
-    .action(async ({ session }, input) => {
+    .option('fuzzy', '--fuzzy', { fallback: config.suggest.fuzzy })
+    .option('mode', '-m <mode:string>')
+    .option('mode', '--text', { value: 'text' })
+    .option('mode', '--image', { value: 'image' })
+    .action(async ({ session, options }, input) => {
       const params = new URLSearchParams(config.suggest.params)
       params.append('term', input.trim())
       const resp = await ctx.http.get('https://store.steampowered.com/search/suggest?' + params.toString())
@@ -177,11 +190,11 @@ export async function apply(ctx: Context, config: Config) {
       </>
       await session.sendQueued(answer)
 
-      if (config.suggest.fuzzy) {
+      if (options.fuzzy) {
         let detail: Fragment
         const fuzzyMatch = result.names[0].toLowerCase().includes(input.toLowerCase())
         if (length === 1 || fuzzyMatch) {
-          detail = await renderDetail(session, result.appids[0])
+          detail = await renderDetail(session, result.appids[0], options.mode)
         }
         await session.sendQueued(detail) 
         if (length === 1) return
@@ -189,14 +202,14 @@ export async function apply(ctx: Context, config: Config) {
 
       const choice = await session.prompt((session) => {
         const input = h.select(session.elements, 'text')[0]?.toString()
-        const index = parseInt(input) - 1
-        if (index < 0 || index >= length) {
+        const index = parseInt(input)
+        if (index <= 0 || index > length) {
           return // not to stuck middleware
         }
         return index
       })
-      if (choice === undefined) return
-      return renderDetail(session, result.appids[choice])
+      if (!choice) return
+      return renderDetail(session, result.appids[choice - 1], options.mode)
     })
 
   if (config.middleware.enable) {
