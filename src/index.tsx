@@ -5,14 +5,17 @@ import type {} from 'koishi-plugin-puppeteer'
 export const name = 'steaminfo'
 
 export const inject = {
-  required: ['cheerio'],
   optional: ['puppeteer'],
 }
 
 export interface Config {
   mode: 'text' | 'image' | 'screenshot'
   suggest: {
+    fuzzy: boolean
     params: Record<string, string>
+  }
+  middleware: {
+    enable: boolean
   }
 }
 
@@ -23,6 +26,7 @@ export const Config: z<Config> = z.object({
     z.const('screenshot').description('截图模式 (无 puppeteer 无效)'),
   ]).role('radio').default('screenshot'),
   suggest: z.object({
+    fuzzy: z.boolean().default(true),
     params: z.dict(String).role('table').default({
       f: 'games',
       cc: 'CN',
@@ -33,13 +37,20 @@ export const Config: z<Config> = z.object({
       search_creators_and_tags: '1',
     }),
   }),
+  middleware: z.object({
+    enable: z.boolean().default(true),
+  }),
 })
 
 export async function apply(ctx: Context, config: Config) {
   const logger = ctx.logger('steaminfo')
   ctx.i18n.define('zh-CN', require('./locales/zh-CN'))
 
-  let renderDetail = async (session: Session, appid: string): Promise<Fragment> => {
+  let renderDetail = (session: Session, appid: string, mode?: typeof config.mode) => {
+    return renderText(session, appid)
+  }
+
+  const renderText = async (session: Session, appid: string): Promise<Fragment> => {
     const { cc, l } = config.suggest.params
     const resp = await ctx.http.get(
       `https://store.steampowered.com/api/appdetails?` + new URLSearchParams({ 
@@ -49,12 +60,17 @@ export async function apply(ctx: Context, config: Config) {
       }).toString(), { responseType: 'json' })
     if (!resp[appid].success) {
       logger.warn('failed to fetch app details')
-      return
+      return session.text('.not-found')
     }
     const data = resp[appid].data
-    let price = data.is_free ? session.text('.free') : data.price_overview.final_formatted
-    if (data.price_overview.initial_formatted) {
-      price = price + ' / ' + data.price_overview.initial_formatted
+    let price: string
+    if (data.is_free) {
+      price = session.text('.free')
+    } else {
+      price = data.price_overview.final_formatted
+      if (data.price_overview.initial_formatted) {
+        price = price + ' / ' + data.price_overview.initial_formatted
+      }
     }
     const date = session.text('.release-date', data.release_date)
     // 这个数据里居然没有好评率？
@@ -66,6 +82,7 @@ export async function apply(ctx: Context, config: Config) {
       json: '1',
       language: 'all',
       num_per_page: '0',
+      purchase_type: data.is_free ? 'all' : 'steam',
     }).toString(), { responseType: 'json' })
     let review: string
     if (reviewData.success) {
@@ -97,8 +114,10 @@ export async function apply(ctx: Context, config: Config) {
     ctx.on('dispose', () => {
       page.close()
     })
+  
+    const renderImage = async (session: Session, appid: string) => {
+      // TODO 使用中锁定 page
 
-    renderDetail = async (session: Session, appid: string) => {
       await page.setCookie(...Object.entries({
         birthtime: '946656001',
         lastagecheckage: '1-January-2000',
@@ -116,13 +135,22 @@ export async function apply(ctx: Context, config: Config) {
         await page.evaluate('ViewProductPage()')
       }
 
-      const element = await page.waitForSelector('.glance_ctn')
+      const element = await page.waitForSelector('.glance_ctn', { timeout: 5000 })
+      // FIX 图片加载不完整
       const buffer = await element.screenshot({ type: 'webp' })
 
       // TODO 显示价格
       
       await page.goto('about:blank')
       return h.image(buffer, 'image/webp')
+    }
+
+    renderDetail = (session: Session, appid: string, mode?: Config['mode']) => {
+      if (!mode) mode = config.mode
+      if (mode === 'screenshot') {
+        return renderImage(session, appid)
+      }
+      return renderText(session, appid)
     }
   })
 
@@ -141,12 +169,6 @@ export async function apply(ctx: Context, config: Config) {
       const length = result.names.length
       if (length < 1) return session.text('.not-found')
 
-      let detail: Fragment
-      const exactMatch = result.names[0].toLowerCase().includes(input.toLowerCase())
-      if (length === 1 || exactMatch) {
-        detail = await renderDetail(session, result.appids[0])
-      }
-
       const list = result.names.map((name, i) => `${i + 1}. ${name} - https://store.steampowered.com/app/${result.appids[i]}`).join('\n')
       const answer = <>
         <p>{session.text('.found')}</p>
@@ -154,17 +176,40 @@ export async function apply(ctx: Context, config: Config) {
         <p>{result.appids.length > 1 ? session.text('.prompt') : ''}</p>
       </>
       await session.sendQueued(answer)
-      await session.sendQueued(detail)
-      if (length === 1) return
+
+      if (config.suggest.fuzzy) {
+        let detail: Fragment
+        const fuzzyMatch = result.names[0].toLowerCase().includes(input.toLowerCase())
+        if (length === 1 || fuzzyMatch) {
+          detail = await renderDetail(session, result.appids[0])
+        }
+        await session.sendQueued(detail) 
+        if (length === 1) return
+      }
 
       const choice = await session.prompt((session) => {
-        const input = h.select(session.elements, 'text')[0].toString()
+        const input = h.select(session.elements, 'text')[0]?.toString()
         const index = parseInt(input) - 1
         if (index < 0 || index >= length) {
           return // not to stuck middleware
         }
         return index
       })
+      if (choice === undefined) return
       return renderDetail(session, result.appids[choice])
     })
+
+  if (config.middleware.enable) {
+    const storeUrlRegex = /^(?:https?:\/\/)?store\.steampowered\.com\/app\/(\d+)/
+    ctx.middleware(async (session, next) => {
+      const contents = session.elements.filter(e => e.type === 'text').map(e => e.attrs.content)
+      if (contents.length !== 1) return next()
+
+      const match = storeUrlRegex.exec(contents[0])
+      if (!match) return next()
+
+      session.scope = 'commands.steaminfo.messages' // hacky workaround
+      return renderDetail(session, match[1])
+    }) 
+  }
 }
