@@ -1,7 +1,7 @@
 {
   "name": "@h4m5ter/koishi-plugin-steaminfo",
   "description": "query steam games",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -15,7 +15,7 @@
     "plugin"
   ],
   "peerDependencies": {
-    "koishi": "^4.17.12"
+    "koishi": "^4.18.0"
   },
   "dependencies": {
     "@satorijs/element": "^3.1.7",
