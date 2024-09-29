@@ -1,6 +1,7 @@
 import { Context, Fragment, h, Session, z } from 'koishi'
 import * as cheerio from 'cheerio'
 import type {} from 'koishi-plugin-puppeteer'
+import type { Page } from 'puppeteer-core'
 
 export const name = 'steaminfo'
 
@@ -113,10 +114,10 @@ export async function apply(ctx: Context, config: Config) {
     })
   }
 
-  let page: Awaited<ReturnType<typeof ctx.puppeteer.page>>
   ctx.inject(['puppeteer'], (ctx) => {
     if (config.mode !== 'screenshot') return
 
+    let page: Page
     ctx.on('ready', async () => {
       page = await ctx.puppeteer.page()
     })
@@ -136,16 +137,16 @@ export async function apply(ctx: Context, config: Config) {
         return { name: k, value: v, domain: 'store.steampowered.com' }
       }))
 
-      await page.goto(`https://store.steampowered.com/app/${appid}`, { waitUntil: 'domcontentloaded' })
+      await page.goto(`https://store.steampowered.com/app/${appid}`, { waitUntil: 'networkidle0' })
 
       if (await page.$('select#ageYear')) {
         // bypass age gate
         await page.select('select#ageYear', '2000')
         await page.evaluate('ViewProductPage()')
+        await page.waitForNetworkIdle()
       }
 
       const element = await page.waitForSelector('.glance_ctn', { timeout: 5000 })
-      // FIX 图片加载不完整
       const buffer = await element.screenshot({ type: config.render.imageType })
 
       // TODO 显示价格
