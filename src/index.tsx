@@ -49,7 +49,7 @@ export const Config: z<Config> = z.object({
     imageType: z.union([
       z.const('webp'),
       z.const('png'),
-    ]).role('radio').default('webp').description('截图格式'),
+    ]).role('radio').default('png').description('截图格式'),
   }),
 })
 
@@ -64,10 +64,10 @@ export async function apply(ctx: Context, config: Config) {
   const renderText = async (session: Session, appid: string): Promise<Fragment> => {
     const { cc, l } = config.suggest.params
     const resp = await ctx.http.get(
-      `https://store.steampowered.com/api/appdetails?` + new URLSearchParams({ 
+      `https://store.steampowered.com/api/appdetails?` + new URLSearchParams({
         cc,
-        l, 
-        appids: appid, 
+        l,
+        appids: appid,
       }).toString(), { responseType: 'json' })
     if (!resp[appid].success) {
       logger.warn('failed to fetch app details')
@@ -124,7 +124,7 @@ export async function apply(ctx: Context, config: Config) {
     ctx.on('dispose', () => {
       page.close()
     })
-  
+
     const renderImage = async (session: Session, appid: string) => {
       // TODO 使用中锁定 page
 
@@ -137,6 +137,8 @@ export async function apply(ctx: Context, config: Config) {
         return { name: k, value: v, domain: 'store.steampowered.com' }
       }))
 
+      // TODO 检测锁区 / 游戏不存在
+      // 未登录情况下 Steam 通过 ip 检测地区
       await page.goto(`https://store.steampowered.com/app/${appid}`, { waitUntil: 'networkidle0' })
 
       if (await page.$('select#ageYear')) {
@@ -150,7 +152,7 @@ export async function apply(ctx: Context, config: Config) {
       const buffer = await element.screenshot({ type: config.render.imageType })
 
       // TODO 显示价格
-      
+
       await page.goto('about:blank')
       return h.image(buffer, 'image/' + config.render.imageType)
     }
@@ -177,7 +179,7 @@ export async function apply(ctx: Context, config: Config) {
       const $ = cheerio.load(resp)
       const result = $.extract({
         names: ['a[data-ds-appid] > .match_name'],
-        appids: [{ selector: 'a', value: 'data-ds-appid' }], 
+        appids: [{ selector: 'a', value: 'data-ds-appid' }],
       }) as { names: string[]; appids: string[] }
 
       const length = result.names.length
@@ -199,7 +201,7 @@ export async function apply(ctx: Context, config: Config) {
         if (length === 1 || fuzzyMatch) {
           detail = await renderDetail(session, result.appids[0], options.mode)
         }
-        await session.sendQueued(detail) 
+        await session.sendQueued(detail)
         if (length === 1) return
       }
 
@@ -226,6 +228,6 @@ export async function apply(ctx: Context, config: Config) {
 
       session.scope = 'commands.steaminfo.messages' // hacky workaround
       return renderDetail(session, match[1])
-    }) 
+    })
   }
 }
