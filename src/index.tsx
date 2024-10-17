@@ -183,8 +183,10 @@ export async function apply(ctx: Context, config: Config) {
       const length = result.names.length
       if (length < 1) return session.text('.not-found')
 
+      const searchUrl = 'https://store.steampowered.com/search/?' + new URLSearchParams({ term: input.trim(), ndl: '1' }).toString()
       const list = result.names.map((name, i) => `${i + 1}. ${name} - https://store.steampowered.com/app/${result.appids[i]}`).join('\n')
       const answer = <>
+        <p>{searchUrl}</p>
         <p>{session.text('.found')}</p>
         <p>{list}</p>
         <p>{result.appids.length > 1 ? session.text('.prompt') : ''}</p>
